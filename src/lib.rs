@@ -34,7 +34,6 @@ pub struct Init {
     pub node_ids: Vec<String>,
 }
 
-
 #[derive(Debug, Clone)]
 pub enum Event<Payload, InjectedPayload = ()> {
     Message(Message<Payload>),
@@ -46,6 +45,7 @@ pub trait Node<Payload, InjectedPayload = ()> {
         &mut self,
         msg: Event<Payload, InjectedPayload>,
         output: &mut StdoutLock,
+        inject: std::sync::mpsc::Sender<Event<Payload, InjectedPayload>>,
     ) -> anyhow::Result<()>;
 }
 
@@ -58,21 +58,23 @@ where
     let (tx, rx) = std::sync::mpsc::channel();
     let mut stdout = std::io::stdout().lock();
 
+    let thread_tx = tx.clone();
     let join = std::thread::spawn(move || {
         let stdin = std::io::stdin().lock();
         for line in stdin.lines() {
             let msg = line.context("Could not read STDIN line")?;
             let input: Message<P> = serde_json::from_str(&msg)
                 .unwrap_or_else(|_| panic!("input from STDIN could no be deserialized"));
-            if let Err(_) = tx.send(Event::Message(input)) {
+            if let Err(_) = thread_tx.send(Event::Message(input)) {
                 return Ok::<(), anyhow::Error>(());
             }
         }
         Ok(())
     });
+
     for input in rx {
         state
-            .step(input, &mut stdout)
+            .step(input, &mut stdout, tx.clone())
             .context("Node step function failed!")?;
     }
     join.join()
